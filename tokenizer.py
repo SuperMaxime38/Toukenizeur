@@ -71,12 +71,12 @@ def tokenize(text):
     return merges
 
 def tokenize2(text):
-    patterns = re.compile(r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s""")
+    patterns = re.compile(r"""'(?i:[sdmt]|ll|ve|re|c'|d'|j'|l'|m'|n'|qu'|s'|t')|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s""")
 
     segments = split_text(patterns, text)
     segments = convert_segments_to_utf8(segments)
 
-    vocab_size = 256 + 64
+    vocab_size = 256 + 7000
     num_merges = vocab_size - 256
 
     merges = {}
@@ -85,40 +85,42 @@ def tokenize2(text):
         stats = get_stats2(segments)
         pair = max(stats, key=stats.get)
         idx = 256 + i
-        print("merging {} -> {}".format(pair, idx))
+        print("merging {} -> {} ({})".format(pair, idx, decode(merges, pair)))
         segments = merge2(segments, pair, idx)
         merges[pair] = idx
     
     return merges
-
-if __name__ == '__main__':
-    merges = tokenize2("This is under construction don't mind. Yeah it's called developpment not constrcution but you got the point shut it >:()")
-
-    vocab = {idx: bytes([idx]) for idx in range(256)}
-    for (p0, p1), idx in merges.items():
-        vocab[idx] = vocab[p0] + vocab[p1]
-
-    def decode(ids):
+def decode(merges, ids):
+        vocab = {idx: bytes([idx]) for idx in range(256)}
+        for (p0, p1), idx in merges.items():
+            vocab[idx] = vocab[p0] + vocab[p1]
+        
         tokens = b"".join(vocab[idx] for idx in ids)
         text = tokens.decode("utf-8", errors="replace")
         return text
 
-    def encode(text):
-        tokens = list(text.encode("utf-8"))
-        while(len(tokens) >= 2):
-            stats = get_stats(tokens) #only care 'bout the keys
-            pair = min(stats, key=lambda p: merges.get(p, float("inf"))) #for any pair inside stats looking into merges in what index it has, get the pair with the lowest index
-            if pair not in merges:
-                break # nothing else can be merged
-            idx = merges[pair]
-            tokens = merge(tokens, pair, idx)
-        return tokens
+def encode(text):
+    tokens = list(text.encode("utf-8"))
+    while(len(tokens) >= 2):
+        stats = get_stats(tokens) #only care 'bout the keys
+        pair = min(stats, key=lambda p: merges.get(p, float("inf"))) #for any pair inside stats looking into merges in what index it has, get the pair with the lowest index
+        if pair not in merges:
+            break # nothing else can be merged
+        idx = merges[pair]
+        tokens = merge(tokens, pair, idx)
+    return tokens
+if __name__ == '__main__':
+    merges = tokenize2(gdt.gather_datas())
+
+    print("vocab size: {}".format(len(merges) + 256))
+
+    
 
 
-    truc = encode("Hello my lil Alexouuuu :)) ^^")
+    truc = encode("Hello my lil Alexouuuu :)) ^^ 🤔👍")
     print(truc)
-    print(decode(truc))
+    print(decode(merges, truc))
 
-    print(gdt.gather_datas())
+    # print(gdt.gather_datas())
 
     # print(re.findall(patterns, decode(truc)))
