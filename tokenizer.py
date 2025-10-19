@@ -1,5 +1,7 @@
 import regex as re
 import get_data_set as gdt
+import json, os
+import base64
 
 def split_text(patterns, text):
     return re.findall(patterns, text)
@@ -71,12 +73,12 @@ def tokenize(text):
     return merges
 
 def tokenize2(text):
-    patterns = re.compile(r"""'(?i:[sdmt]|ll|ve|re|c'|d'|j'|l'|m'|n'|qu'|s'|t')|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s""")
+    patterns = re.compile(r""".?(?i:[cdjlmnst]|qu)'|'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s""")
 
     segments = split_text(patterns, text)
     segments = convert_segments_to_utf8(segments)
 
-    vocab_size = 256 + 7000
+    vocab_size = 256 + 7500
     num_merges = vocab_size - 256
 
     merges = {}
@@ -85,21 +87,23 @@ def tokenize2(text):
         stats = get_stats2(segments)
         pair = max(stats, key=stats.get)
         idx = 256 + i
-        print("merging {} -> {} ({})".format(pair, idx, decode(merges, pair)))
+
+        vocab = {idx: bytes([idx]) for idx in range(256)}
+        for (p0, p1), idx2 in merges.items():
+            vocab[idx2] = vocab[p0] + vocab[p1]
+        print("merging {} -> {} ({})".format(pair, idx, decode(vocab, pair)))
+
         segments = merge2(segments, pair, idx)
         merges[pair] = idx
     
     return merges
-def decode(merges, ids):
-        vocab = {idx: bytes([idx]) for idx in range(256)}
-        for (p0, p1), idx in merges.items():
-            vocab[idx] = vocab[p0] + vocab[p1]
+def decode(vocab, ids):
         
         tokens = b"".join(vocab[idx] for idx in ids)
         text = tokens.decode("utf-8", errors="replace")
         return text
 
-def encode(text):
+def encode(merges, text):
     tokens = list(text.encode("utf-8"))
     while(len(tokens) >= 2):
         stats = get_stats(tokens) #only care 'bout the keys
@@ -109,18 +113,62 @@ def encode(text):
         idx = merges[pair]
         tokens = merge(tokens, pair, idx)
     return tokens
-if __name__ == '__main__':
-    merges = tokenize2(gdt.gather_datas())
+
+def train(merges):
 
     print("vocab size: {}".format(len(merges) + 256))
 
-    
+    vocab = {idx: bytes([idx]) for idx in range(256)}
+    for (p0, p1), idx in merges.items():
+        vocab[idx] = vocab[p0] + vocab[p1]
+
+    save_vocab(vocab, "vocab.json")
+    return vocab
+
+def save_vocab(vocab, path):
+    vocab_serializable = {str(k): v.decode('latin-1') for k, v in vocab.items()}
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(vocab_serializable, f, ensure_ascii=False, indent=2)
+
+def save_merges(merges, path):
+    merges_serializable = [(a, b, new_id) for (a, b), new_id in merges.items()]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(merges_serializable, f, ensure_ascii=False, indent=2)
+
+def load_vocab(path):
+    with open(path, "r", encoding="utf-8") as f:
+        vocab_loaded = {int(k): v.encode('latin-1') for k, v in json.load(f).items()}
+        return vocab_loaded
+
+def load_merges(path):
+    with open(path, "r", encoding="utf-8") as f:
+        merges_list = json.load(f)
+        merges_loaded = {(a, b): new_id for a, b, new_id in merges_list}
+        return merges_loaded
+
+if __name__ == '__main__':
+
+    if(os.path.exists("merges.json")):
+        merges = load_merges("merges.json")
+    else:
+        merges = tokenize2(gdt.gather_datas())
+        save_merges(merges, "merges.json")
+
+    if os.path.exists("vocab.json"):
+        with open ("vocab.json", "r", encoding="utf-8") as f:
+            vocab = load_vocab("vocab.json")
+    else:
+        vocab = train(merges)
 
 
-    truc = encode("Hello my lil Alexouuuu :)) ^^ 🤔👍")
+    truc = encode(merges, "L'importation de librairie c'est super ! mais qu'est-ce que tu m'dis ??? Do you'd live if I'm knew how to speak english ._. 🚵‍♂️🚵‍♀️🌡⛱")
     print(truc)
-    print(decode(merges, truc))
+    print(decode(vocab, truc))
 
     # print(gdt.gather_datas())
 
     # print(re.findall(patterns, decode(truc)))
+    # patterns = re.compile(r""".?(?i:[cdjlmnst]|qu)'|'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s""")
+
+    # print(re.findall(patterns, "L'importation de librairie c'est super ! mais qu'est-ce que tu m'dis ??? Do you'd live if I'm knew how to speak english ._."))
