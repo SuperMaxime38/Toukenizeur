@@ -1,7 +1,6 @@
 import regex as re
 import get_data_set as gdt
 import json, os
-import base64
 
 def split_text(patterns, text):
     return re.findall(patterns, text)
@@ -15,9 +14,17 @@ def get_stats(ids):
         counts[pair] = counts.get(pair, 0) + 1
     return counts
 
-def get_stats2(segments):
+def get_stats2(segments, special_tokens_bytes):
     counts = {}
     for segment in segments:
+
+        print("segment: " + str(segment))
+
+        #check special tokens
+        if segment in special_tokens_bytes:
+            print("special token: " + segment)
+            continue
+
         for pair in zip(segment, segment[1:]): # python way to iterate 2 consecutive elts
             counts[pair] = counts.get(pair, 0) + 1
     return counts
@@ -34,10 +41,16 @@ def merge(ids, pair, idx):
             i += 1
     return newids
 
-def merge2(segments, pair, idx):
+def merge2(segments, pair, idx, special_tokens_map):
     newsegments = []
     for segment in segments:
         newsegment = []
+
+        #check special tokens
+        if segment in special_tokens_map.values():
+            newsegments.append(special_tokens_map[special_tokens_map.index(segment)])
+            continue
+
         i = 0
         while i < len(segment):
             if i < len(segment) -1 and segment[i] == pair[0] and segment[i+1] == pair[1]:
@@ -73,18 +86,39 @@ def tokenize(text):
     return merges
 
 def tokenize2(text):
-    patterns = re.compile(r""".?(?i:[cdjlmnst]|qu)'|'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s""")
+    """
+    Should have been called train but dw
+    """
+    
+    patterns = re.compile(
+    r"(?i)"
+    r"<\|(?:who_i_am|end_who_i_am|bos|eos)\|>|"                       # tokens spéciaux
+    r".?(?:[cdjlmnst]|qu)'|'(?:[sdmt]|ll|ve|re)|"                     # contractions
+    r"[^\r\n\p{L}\p{N}]?+\p{L}++|"                                    # mots (lettres)
+    r"\p{N}{1,3}+|"                                                   # nombres
+    r" ?[^\s\p{L}\p{N}<>]++[\r\n]*+|"                                 # ponctuation **sans < et >**
+    r"\s++$|\s*[\r\n]|\s+(?!\S)|\s"
+    )
 
     segments = split_text(patterns, text)
     segments = convert_segments_to_utf8(segments)
 
-    vocab_size = 256 + 7500
+    special_tokens = ["<|who_i_am|>", "<|end_who_i_am|>", "<|bos|>", "<|eos|>"]
+    special_tokens_bytes = convert_segments_to_utf8(special_tokens)
+
+
+    vocab_size = 256 + 500
     num_merges = vocab_size - 256
+
+    special_tokens_map = {}
+    for i in range(len(special_tokens)):
+        special_token = special_tokens_bytes[i]
+        special_tokens_map[vocab_size + i + 1] = special_token
 
     merges = {}
     for i in range(num_merges):
         
-        stats = get_stats2(segments)
+        stats = get_stats2(segments, special_tokens_bytes)
         pair = max(stats, key=stats.get)
         idx = 256 + i
 
@@ -93,7 +127,7 @@ def tokenize2(text):
             vocab[idx2] = vocab[p0] + vocab[p1]
         print("merging {} -> {} ({})".format(pair, idx, decode(vocab, pair)))
 
-        segments = merge2(segments, pair, idx)
+        segments = merge2(segments, pair, idx, special_tokens_map)
         merges[pair] = idx
     
     return merges
@@ -115,12 +149,20 @@ def encode(merges, text):
     return tokens
 
 def train(merges):
+    """
+    The name doesn't match but dw
+    """
+
 
     print("vocab size: {}".format(len(merges) + 256))
 
     vocab = {idx: bytes([idx]) for idx in range(256)}
     for (p0, p1), idx in merges.items():
         vocab[idx] = vocab[p0] + vocab[p1]
+
+    # special_tokens = ["<|who_i_am|>", "<end_who_i_am|>", "<|bos|>", "<|eos|>"]
+    # for i in range(len(special_tokens)):
+    #     vocab[len(vocab)+i] = special_tokens[i].encode("utf-8")
 
     save_vocab(vocab, "vocab.json")
     return vocab
@@ -139,6 +181,12 @@ def save_merges(merges, path):
 def load_vocab(path):
     with open(path, "r", encoding="utf-8") as f:
         vocab_loaded = {int(k): v.encode('latin-1') for k, v in json.load(f).items()}
+        special_tokens = ["<|who_i_am|>", "<|end_who_i_am|>", "<|bos|>", "<|eos|>"]
+
+        next_id = max(vocab_loaded.keys()) + 1
+        for tok in special_tokens:
+            vocab_loaded[next_id] = tok.encode("utf-8")
+            next_id += 1
         return vocab_loaded
 
 def load_merges(path):
@@ -148,6 +196,7 @@ def load_merges(path):
         return merges_loaded
 
 if __name__ == '__main__':
+    
 
     if(os.path.exists("merges.json")):
         merges = load_merges("merges.json")
@@ -161,14 +210,28 @@ if __name__ == '__main__':
     else:
         vocab = train(merges)
 
+        
+    # special_tokens = ["<|who_i_am|>", "<end_who_i_am|>", "<|bos|>", "<|eos|>"]
+    # for i in range(len(special_tokens)):
+    #     vocab[len(vocab)+i] = special_tokens[i].encode("utf-8")
+
 
     truc = encode(merges, "L'importation de librairie c'est super ! mais qu'est-ce que tu m'dis ??? Do you'd live if I'm knew how to speak english ._. 🚵‍♂️🚵‍♀️🌡⛱")
+    truc = encode(merges, "hello <|eos|>")
     print(truc)
     print(decode(vocab, truc))
 
-    # print(gdt.gather_datas())
+    # pattern = re.compile(
+    # r"(?i)"
+    # r"<\|(?:who_i_am|end_who_i_am|bos|eos)\|>|"                       # tokens spéciaux
+    # r".?(?:[cdjlmnst]|qu)'|'(?:[sdmt]|ll|ve|re)|"                     # contractions
+    # r"[^\r\n\p{L}\p{N}]?+\p{L}++|"                                    # mots (lettres)
+    # r"\p{N}{1,3}+|"                                                   # nombres
+    # r" ?[^\s\p{L}\p{N}<>]++[\r\n]*+|"                                 # ponctuation **sans < et >**
+    # r"\s++$|\s*[\r\n]|\s+(?!\S)|\s"
+    # )
 
-    # print(re.findall(patterns, decode(truc)))
-    # patterns = re.compile(r""".?(?i:[cdjlmnst]|qu)'|'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s""")
+    # text = "Hello <|eos|> world"
+    # tokens = [m.group(0) for m in pattern.finditer(text)]
+    # print(tokens)   # => ['Hello', ' ', '<|eos|>', ' world']
 
-    # print(re.findall(patterns, "L'importation de librairie c'est super ! mais qu'est-ce que tu m'dis ??? Do you'd live if I'm knew how to speak english ._."))
