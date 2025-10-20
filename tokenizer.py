@@ -23,8 +23,10 @@ class Tokenizer():
         self.vocab_size = vocab_size
         self.num_merges = vocab_size - self.reserved_after_special_tokens
 
-        self.segments = self.split_text(text)
-        self.segments = self.convert_segments_to_utf8()
+        self.segments = None
+        if(text != ""):
+            self.segments = self.split_text(text)
+            self.segments = self.convert_segments_to_utf8()
 
         self.merges = {}
         self.vocab = {idx: bytes([idx]) for idx in range(256)}
@@ -34,7 +36,7 @@ class Tokenizer():
 
         if(os.path.exists("merges.json")):
             self.merges = load_merges("merges.json")
-            self.isVocabMergesLoaded = True
+            self.isMergesLoaded = True
 
         if os.path.exists("vocab.json"):
             with open ("vocab.json", "r", encoding="utf-8") as f:
@@ -84,17 +86,16 @@ class Tokenizer():
                     i += 1
             newsegments.append(newsegment)
         self.segments = newsegments
-    
-    def insert_special_tokens(self):
-        newsegments = []
-        for segment in self.segments:
-            if segment in self.special_tokens_map.values():
-                newsegments.append(self.special_tokens_map[self.special_tokens_map.index(segment)])
-            else:
-                newsegments.append(segment)
-        self.segments = newsegments
+
+    def set_training_text(self, text):
+        self.segments = self.split_text(text)
+        self.segments = self.convert_segments_to_utf8()
 
     def tokenize(self):
+        if self.segments is None:
+            print("Use #set_training_text first")
+            return
+
         self.isVocabLoaded = True
         self.isMergesLoaded = True
         for i in range(self.num_merges):
@@ -196,5 +197,7 @@ def load_merges(path):
 if __name__ == '__main__':
 
     tkn = Tokenizer(gdt.gather_datas(), 7500)
-    tkn.tokenize()
-    print(tkn.decode(tkn.encode("L'importation de libraire est super cool, j'adore :) un ptit emoji: 👍👍👍 Autre chose ? 1234 :/ <|eos|>")))
+    # tkn.tokenize()
+    mesg = tkn.encode("L'importation de libraire est super cool, j'adore :) un ptit emoji: 👍👍👍 Autre chose ? 1234 :/ <|eos|>")
+    print(mesg)
+    print(tkn.decode(mesg))
