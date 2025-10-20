@@ -2,212 +2,174 @@ import regex as re
 import get_data_set as gdt
 import json, os
 
-def split_text(patterns, text):
-    return re.findall(patterns, text)
+class Tokenizer():
 
-def convert_segments_to_utf8(segments, specials_map={}):
-    # return [list(map(int, segment.encode("utf-8"))) for segment in segments]
-    """
-    segments: list[str] (tokens produits par split_text)
-    specials_map: dict[token_str] -> reserved_id (int)
-    retourne: list[list[int]] where each inner list is either:
-      - [reserved_id] for a special token
-      - list(byte values) for normal tokens
-    """
-    out = []
-    for segment in segments:
-        if segment in specials_map:
-            out.append([specials_map[segment]])
-        else:
-            # ordinary token: bytes -> list of ints
-            out.append(list(segment.encode("utf-8")))
-    return out
+    def __init__(self, text="", vocab_size=2048):
+        self.patterns = re.compile(
+            r"(?i)"
+            r"<\|(?:who_i_am|end_who_i_am|bos|eos)\|>|"                       # tokens spéciaux
+            r".?(?:[cdjlmnst]|qu)'|'(?:[sdmt]|ll|ve|re)|"                     # contractions
+            r"[^\r\n\p{L}\p{N}]?+\p{L}++|"                                    # mots (lettres)
+            r"\p{N}{1,3}+|"                                                   # nombres
+            r" ?[^\s\p{L}\p{N}<>]++[\r\n]*+|"                                 # ponctuation **sans < et >**
+            r"\s++$|\s*[\r\n]|\s+(?!\S)|\s"
+        )
+        base_bytes = 256
+        special_tokens = ["<|who_i_am|>", "<end_who_i_am|>", "<|bos|>", "<|eos|>"]
+        self.special_tokens_map = {token: base_bytes + i for i, token in enumerate(special_tokens)}
 
-def get_stats(ids):
-    counts = {}
-    for pair in zip(ids, ids[1:]): # python way to iterate 2 consecutive elts
-        counts[pair] = counts.get(pair, 0) + 1
-    return counts
+        self.reserved_after_special_tokens = base_bytes + len(special_tokens)
 
-def get_stats2(segments):
-    counts = {}
-    for segment in segments:
+        self.vocab_size = vocab_size
+        self.num_merges = vocab_size - self.reserved_after_special_tokens
 
-        for pair in zip(segment, segment[1:]): # python way to iterate 2 consecutive elts
+        self.segments = self.split_text(text)
+        self.segments = self.convert_segments_to_utf8()
+
+        self.merges = {}
+        self.vocab = {idx: bytes([idx]) for idx in range(256)}
+
+        self.isVocabLoaded = False
+        self.isMergesLoaded = False
+
+        if(os.path.exists("merges.json")):
+            self.merges = load_merges("merges.json")
+            self.isVocabMergesLoaded = True
+
+        if os.path.exists("vocab.json"):
+            with open ("vocab.json", "r", encoding="utf-8") as f:
+                self.vocab = load_vocab("vocab.json")
+                self.isVocabLoaded = True
+
+    def split_text(self, text):
+        return re.findall(self.patterns, text)
+    
+    def convert_segments_to_utf8(self):
+        """
+        segments: list[str] (tokens produits par split_text)
+        specials_map: dict[token_str] -> reserved_id (int)
+        retourne: list[list[int]] where each inner list is either:
+        - [reserved_id] for a special token
+        - list(byte values) for normal tokens
+        """
+        out = []
+        for segment in self.segments:
+            if segment in self.special_tokens_map:
+                out.append([self.special_tokens_map[segment]])
+            else:
+                # ordinary token: bytes -> list of ints
+                out.append(list(segment.encode("utf-8")))
+        return out
+    
+    def get_stats(self):
+        counts = {}
+        for segment in self.segments:
+
+            for pair in zip(segment, segment[1:]): # python way to iterate 2 consecutive elts
+                counts[pair] = counts.get(pair, 0) + 1
+        return counts
+    
+    def merge(self, pair, idx):
+        newsegments = []
+        for segment in self.segments:
+            newsegment = []
+
+            i = 0
+            while i < len(segment):
+                if i < len(segment) -1 and segment[i] == pair[0] and segment[i+1] == pair[1]:
+                    newsegment.append(idx)
+                    i += 2
+                else:
+                    newsegment.append(segment[i])
+                    i += 1
+            newsegments.append(newsegment)
+        self.segments = newsegments
+    
+    def insert_special_tokens(self):
+        newsegments = []
+        for segment in self.segments:
+            if segment in self.special_tokens_map.values():
+                newsegments.append(self.special_tokens_map[self.special_tokens_map.index(segment)])
+            else:
+                newsegments.append(segment)
+        self.segments = newsegments
+
+    def tokenize(self):
+        self.isVocabLoaded = True
+        self.isMergesLoaded = True
+        for i in range(self.num_merges):
+            
+            stats = self.get_stats()
+            pair = max(stats, key=stats.get)
+            idx = self.reserved_after_special_tokens + i
+
+            for tok ,id_ in self.special_tokens_map.items():
+                self.vocab[id_] = tok.encode("utf-8")
+            for (p0, p1), idx2 in self.merges.items():
+                self.vocab[idx2] = self.vocab[p0] + self.vocab[p1]
+            print("merging {} -> {} ({})".format(pair, idx, self.decode(pair)))
+
+            self.merge(pair, idx)
+            self.merges[pair] = idx
+        
+
+        save_merges(self.merges, "merges.json")
+        save_vocab(self.vocab, "vocab.json")
+
+
+    def decode(self, ids):
+            if(not self.isVocabLoaded or not self.isMergesLoaded):
+                print("You should use #tokenize first to generate vocab and merges")
+                return
+            
+            tokens = b"".join(self.vocab[idx] for idx in ids)
+            text = tokens.decode("utf-8", errors="replace")
+            return text
+    
+    def get_stats_for_encode(self, ids):
+        counts = {}
+        for pair in zip(ids, ids[1:]): # python way to iterate 2 consecutive elts
             counts[pair] = counts.get(pair, 0) + 1
-    return counts
-
-def merge(ids, pair, idx):
-    newids = []
-    i = 0
-    while i < len(ids):
-        if i < len(ids) -1 and ids[i] == pair[0] and ids[i+1] == pair[1]:
-            newids.append(idx)
-            i += 2
-        else:
-            newids.append(ids[i])
-            i += 1
-    return newids
-
-def merge2(segments, pair, idx):
-    newsegments = []
-    for segment in segments:
-        newsegment = []
-
+        return counts
+    
+    def merge_for_encode(self, ids, pair, idx):
+        newids = []
         i = 0
-        while i < len(segment):
-            if i < len(segment) -1 and segment[i] == pair[0] and segment[i+1] == pair[1]:
-                newsegment.append(idx)
+        while i < len(ids):
+            if i < len(ids) -1 and ids[i] == pair[0] and ids[i+1] == pair[1]:
+                newids.append(idx)
                 i += 2
             else:
-                newsegment.append(segment[i])
+                newids.append(ids[i])
                 i += 1
-        newsegments.append(newsegment)
-    return newsegments
+        return newids
 
-# def tokenize(text):
-#     tokens = text.encode("utf-8")
-#     tokens = list(map(int, tokens))
+    def encode(self, text):
 
-#     vocab_size = 256 + 20
-#     num_merges = vocab_size - 256
-#     ids = list(tokens)
+        if(not self.isVocabLoaded or not self.isMergesLoaded):
+            print("You should use #tokenize first to generate vocab and merges")
+            return
 
-#     merges = {} # (int, int) -> int
+        # Étape 1: découpage identique à l'entraînement
+        segments = re.findall(self.patterns, text)
 
-#     for i in range(num_merges):
-#         stats = get_stats(ids)
-#         pair = max(stats, key=stats.get)
-#         idx = 256 + i
-#         print("merging {} -> {}".format(pair, idx))
-#         ids = merge(ids, pair, idx)
-#         merges[pair] = idx
+        # Étape 2: conversion en entiers (gérer specials)
+        tokens = []
+        for seg in segments:
+            if seg in self.special_tokens_map:
+                tokens.append(self.special_tokens_map[seg])
+            else:
+                tokens.extend(list(seg.encode("utf-8")))
 
-#     print("token length: {}".format(len(tokens)))
-#     print("ids length: {}".format(len(ids)))
-#     print("compression ratio: {}x".format(len(tokens) / len(ids)))
-#     return merges
+        while(len(tokens) >= 2):
+            stats = self.get_stats_for_encode(tokens) #only care 'bout the keys
+            pair = min(stats, key=lambda p: self.merges.get(p, float("inf"))) #for any pair inside stats looking into merges in what index it has, get the pair with the lowest index
+            if pair not in self.merges:
+                break # nothing else can be merged
+            idx = self.merges[pair]
+            tokens = self.merge_for_encode(tokens, pair, idx)
+        return tokens
 
-def insert_special_tokens(segments, special_tokens_map):
-    newsegments = []
-    for segment in segments:
-        if segment in special_tokens_map.values():
-            newsegments.append(special_tokens_map[special_tokens_map.index(segment)])
-        else:
-            newsegments.append(segment)
-    return newsegments
-
-def tokenize2(text):
-    """
-    Should have been called train but dw
-    """
-    
-    patterns = re.compile(
-    r"(?i)"
-    r"<\|(?:who_i_am|end_who_i_am|bos|eos)\|>|"                       # tokens spéciaux
-    r".?(?:[cdjlmnst]|qu)'|'(?:[sdmt]|ll|ve|re)|"                     # contractions
-    r"[^\r\n\p{L}\p{N}]?+\p{L}++|"                                    # mots (lettres)
-    r"\p{N}{1,3}+|"                                                   # nombres
-    r" ?[^\s\p{L}\p{N}<>]++[\r\n]*+|"                                 # ponctuation **sans < et >**
-    r"\s++$|\s*[\r\n]|\s+(?!\S)|\s"
-    )
-
-    base_bytes = 256
-    special_tokens = ["<|who_i_am|>", "<end_who_i_am|>", "<|bos|>", "<|eos|>"]
-    special_tokens_map = {token: base_bytes + i for i, token in enumerate(special_tokens)}
-    reserved_after_special_tokens = base_bytes + len(special_tokens)
-
-    vocab_size = reserved_after_special_tokens + 500
-    num_merges = vocab_size - reserved_after_special_tokens
-    
-
-    segments = split_text(patterns, text)
-    segments = convert_segments_to_utf8(segments)
-
-    merges = {}
-    for i in range(num_merges):
-        
-        stats = get_stats2(segments)
-        pair = max(stats, key=stats.get)
-        idx = reserved_after_special_tokens + i
-
-        vocab = {idx: bytes([idx]) for idx in range(256)}
-        for tok ,id_ in special_tokens_map.items():
-            vocab[id_] = tok.encode("utf-8")
-        for (p0, p1), idx2 in merges.items():
-            vocab[idx2] = vocab[p0] + vocab[p1]
-        print("merging {} -> {} ({})".format(pair, idx, decode(vocab, pair)))
-
-        segments = merge2(segments, pair, idx)
-        merges[pair] = idx
-    
-    return merges
-def decode(vocab, ids):
-        
-        tokens = b"".join(vocab[idx] for idx in ids)
-        text = tokens.decode("utf-8", errors="replace")
-        return text
-
-def encode(merges, text):
-    specials_map = {
-            "<|who_i_am|>": 256,
-            "<|end_who_i_am|>": 257,
-            "<|bos|>": 258,
-            "<|eos|>": 259
-        }
-
-    pattern = re.compile(
-        r"(?i)"
-        r"<\|(?:who_i_am|end_who_i_am|bos|eos)\|>|"
-        r".?(?:[cdjlmnst]|qu)'|'(?:[sdmt]|ll|ve|re)|"
-        r"[^\r\n\p{L}\p{N}]?+\p{L}++|"
-        r"\p{N}{1,3}+|"
-        r" ?[^\s\p{L}\p{N}<>]++[\r\n]*+|"
-        r"\s++$|\s*[\r\n]|\s+(?!\S)|\s"
-    )
-
-    # Étape 1: découpage identique à l'entraînement
-    segments = re.findall(pattern, text)
-
-    # Étape 2: conversion en entiers (gérer specials)
-    tokens = []
-    for seg in segments:
-        if seg in specials_map:
-            tokens.append(specials_map[seg])
-        else:
-            tokens.extend(list(seg.encode("utf-8")))
-
-    while(len(tokens) >= 2):
-        stats = get_stats(tokens) #only care 'bout the keys
-        pair = min(stats, key=lambda p: merges.get(p, float("inf"))) #for any pair inside stats looking into merges in what index it has, get the pair with the lowest index
-        if pair not in merges:
-            break # nothing else can be merged
-        idx = merges[pair]
-        tokens = merge(tokens, pair, idx)
-    return tokens
-
-def train(merges):
-    """
-    The name doesn't match but dw
-    """
-
-
-    print("vocab size: {}".format(len(merges) + 256))
-
-    vocab = {idx: bytes([idx]) for idx in range(256)}
-
-    special_tokens = ["<|who_i_am|>", "<end_who_i_am|>", "<|bos|>", "<|eos|>"]
-    base_bytes = 256
-    special_tokens_map = {token: base_bytes + i for i, token in enumerate(special_tokens)}
-
-    for tok ,id_ in special_tokens_map.items():
-        vocab[id_] = tok.encode("utf-8")
-    
-    for (p0, p1), idx in merges.items():
-        vocab[idx] = vocab[p0] + vocab[p1]
-
-    save_vocab(vocab, "vocab.json")
-    return vocab
 
 def save_vocab(vocab, path):
     vocab_serializable = {str(k): v.decode('latin-1') for k, v in vocab.items()}
@@ -232,42 +194,7 @@ def load_merges(path):
         return merges_loaded
 
 if __name__ == '__main__':
-    
 
-    if(os.path.exists("merges.json")):
-        merges = load_merges("merges.json")
-    else:
-        merges = tokenize2(gdt.gather_datas())
-        save_merges(merges, "merges.json")
-
-    if os.path.exists("vocab.json"):
-        with open ("vocab.json", "r", encoding="utf-8") as f:
-            vocab = load_vocab("vocab.json")
-    else:
-        vocab = train(merges)
-
-        
-    # special_tokens = ["<|who_i_am|>", "<end_who_i_am|>", "<|bos|>", "<|eos|>"]
-    # for i in range(len(special_tokens)):
-    #     vocab[len(vocab)+i] = special_tokens[i].encode("utf-8")
-
-
-    truc = encode(merges, "L'importation de librairie c'est super ! mais qu'est-ce que tu m'dis ??? Do you'd live if I'm knew how to speak english ._. 🚵‍♂️🚵‍♀️🌡⛱")
-    truc = encode(merges, "hello <|eos|>")
-    print(truc)
-    print(decode(vocab, truc))
-
-    # pattern = re.compile(
-    # r"(?i)"
-    # r"<\|(?:who_i_am|end_who_i_am|bos|eos)\|>|"                       # tokens spéciaux
-    # r".?(?:[cdjlmnst]|qu)'|'(?:[sdmt]|ll|ve|re)|"                     # contractions
-    # r"[^\r\n\p{L}\p{N}]?+\p{L}++|"                                    # mots (lettres)
-    # r"\p{N}{1,3}+|"                                                   # nombres
-    # r" ?[^\s\p{L}\p{N}<>]++[\r\n]*+|"                                 # ponctuation **sans < et >**
-    # r"\s++$|\s*[\r\n]|\s+(?!\S)|\s"
-    # )
-
-    # text = "Hello <|eos|> world"
-    # tokens = [m.group(0) for m in pattern.finditer(text)]
-    # print(tokens)   # => ['Hello', ' ', '<|eos|>', ' world']
-
+    tkn = Tokenizer(gdt.gather_datas(), 7500)
+    tkn.tokenize()
+    print(tkn.decode(tkn.encode("L'importation de libraire est super cool, j'adore :) un ptit emoji: 👍👍👍 Autre chose ? 1234 :/ <|eos|>")))
