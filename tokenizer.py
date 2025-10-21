@@ -4,7 +4,7 @@ import json, os
 
 class Tokenizer():
 
-    def __init__(self, text="", vocab_size=2048):
+    def __init__(self, vocab_size=2048):
         self.patterns = re.compile(
             r"(?i)"
             r"<\|(?:who_i_am|end_who_i_am|bos|eos)\|>|"                       # tokens spéciaux
@@ -22,11 +22,6 @@ class Tokenizer():
 
         self.vocab_size = vocab_size
         self.num_merges = vocab_size - self.reserved_after_special_tokens
-
-        self.segments = None
-        if(text != ""):
-            self.segments = self.split_text(text)
-            self.segments = self.convert_segments_to_utf8()
 
         self.merges = {}
         self.vocab = {idx: bytes([idx]) for idx in range(256)}
@@ -87,14 +82,10 @@ class Tokenizer():
             newsegments.append(newsegment)
         self.segments = newsegments
 
-    def set_training_text(self, text):
+    def tokenize(self, text):
+
         self.segments = self.split_text(text)
         self.segments = self.convert_segments_to_utf8()
-
-    def tokenize(self):
-        if self.segments is None:
-            print("Use #set_training_text first")
-            return
 
         self.isVocabLoaded = True
         self.isMergesLoaded = True
@@ -196,8 +187,8 @@ def load_merges(path):
 
 if __name__ == '__main__':
 
-    tkn = Tokenizer(gdt.gather_datas(), 7500)
-    # tkn.tokenize()
+    tkn = Tokenizer(7500)
+    # tkn.tokenize(gdt.gather_datas())
     mesg = tkn.encode("L'importation de libraire est super cool, j'adore :) un ptit emoji: 👍👍👍 Autre chose ? 1234 :/ <|eos|>")
     print(mesg)
     print(tkn.decode(mesg))
