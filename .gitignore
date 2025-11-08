@@ -1,2 +1,8 @@
 datas/
 old_datas/
+__pycache__/
+fast_toukenizer/dist/
+fast_toukenizer/fastbpe.egg-info/
+fast_toukenizer/test.py
+vocab.json
+merges.json

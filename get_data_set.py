@@ -10,6 +10,6 @@ def gather_datas():
                 data = json.load(f)
 
                 for key in data.keys():
-                    content += data[key] + "\n"
+                    content += data[key]["content"] + "\n"
 
     return content
